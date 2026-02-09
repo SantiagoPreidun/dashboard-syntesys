@@ -1,0 +1,32 @@
+{
+  "clientes": {
+    "demo_empresa_a": {
+      "nombre": "Empresa A S.A.",
+      "codigo": "demo_empresa_a",
+      "activo": true,
+      "fecha_alta": "2025-02-01"
+    },
+    "demo_empresa_b": {
+      "nombre": "Comercial B S.R.L.",
+      "codigo": "demo_empresa_b",
+      "activo": true,
+      "fecha_alta": "2025-02-01"
+    },
+    "demo_empresa_c": {
+      "nombre": "Servicios C S.A.",
+      "codigo": "demo_empresa_c",
+      "activo": true,
+      "fecha_alta": "2025-02-01"
+    },
+    "supply_petrolero_srl": {
+      "nombre": "Supply Petrolero SRL ",
+      "codigo": "supply_petrolero_srl",
+      "activo": true,
+      "fecha_alta": "2026-02-09"
+    }
+  },
+  "admin": {
+    "codigo": "admin2024",
+    "nombre": "Administrador"
+  }
+}
