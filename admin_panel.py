@@ -85,7 +85,7 @@ with tab1:
                     """)
                     
                     # Link de acceso
-                    url_base = "http://localhost:8501"
+                    url_base = "https://syntesys-clientes.streamlit.app"
                     link_cliente = f"{url_base}?cliente={codigo}"
                     st.code(link_cliente, language=None)
                     
@@ -381,7 +381,7 @@ with tab5:
                 doc_dir = cliente_dir / "documentos"
                 doc_dir.mkdir(parents=True, exist_ok=True)
                 
-                url_base = "http://localhost:8501"
+                url_base = "https://syntesys-clientes.streamlit.app"
                 link_cliente = f"{url_base}?cliente={codigo}"
                 
                 st.success(f"✅ Cliente **{nombre}** creado exitosamente")
