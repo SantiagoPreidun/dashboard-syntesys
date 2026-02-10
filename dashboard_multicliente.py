@@ -8,9 +8,10 @@ from pathlib import Path
 
 # Configuración de la página
 st.set_page_config(
-    page_title="Dashboard Contable - Cliente",
+    page_title="Dashboard Contable",
     page_icon="📊",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
 # Directorios
@@ -18,23 +19,15 @@ BASE_DIR = Path(__file__).parent
 DATOS_DIR = BASE_DIR / "datos"
 CLIENTES_FILE = BASE_DIR / "clientes.json"
 
-# Crear directorios si no existen
-DATOS_DIR.mkdir(exist_ok=True)
-
-# Cargar configuración de clientes
 def cargar_clientes():
-    """Carga la configuración de clientes desde el JSON"""
     if CLIENTES_FILE.exists():
         with open(CLIENTES_FILE, 'r', encoding='utf-8') as f:
             return json.load(f)
     return {"clientes": {}, "admin": {"codigo": "admin2024", "nombre": "Administrador"}}
 
-# Funciones auxiliares
 def procesar_excel(archivo):
-    """Procesa el archivo Excel con el formato estándar"""
     try:
         df = pd.read_excel(archivo, sheet_name=0, header=None)
-        
         fechas_raw = df.iloc[2, 2:].values
         fechas = []
         for fecha in fechas_raw:
@@ -67,32 +60,40 @@ def procesar_excel(archivo):
         df_limpio['Ratio Ventas/Sueldos'] = (df_limpio['Ventas'] / df_limpio['Sueldos y CS']).round(2)
         
         return df_limpio
-    
     except Exception as e:
         st.error(f"Error al procesar el archivo: {str(e)}")
         return None
 
 def formatear_monto(valor):
-    """Formatea valores en millones"""
     if pd.isna(valor):
         return "N/A"
     return f"${valor/1_000_000:,.1f}M"
 
 def formatear_porcentaje(valor):
-    """Formatea valores como porcentaje"""
     if pd.isna(valor):
         return "N/A"
     return f"{valor:.1f}%"
 
+def convertir_fecha_español(fecha_str):
+    """Convierte formato YYYY-MM a Mes YYYY en español"""
+    meses_es = {
+        '01': 'Ene', '02': 'Feb', '03': 'Mar', '04': 'Abr',
+        '05': 'May', '06': 'Jun', '07': 'Jul', '08': 'Ago',
+        '09': 'Sep', '10': 'Oct', '11': 'Nov', '12': 'Dic'
+    }
+    try:
+        year, month = fecha_str.split('-')
+        return f"{meses_es[month]} {year}"
+    except:
+        return fecha_str
+
 def generar_alertas(df):
-    """Genera alertas automáticas"""
     alertas = []
-    
     meses_negativos = df[df['Margen Operativo'] < 0]
     if len(meses_negativos) > 0:
         for idx, row in meses_negativos.iterrows():
             alertas.append({
-                'tipo': 'danger',
+                'tipo': 'warning',
                 'titulo': '⚠️ Margen Operativo Negativo',
                 'mensaje': f"El mes {row['Mes']} tuvo margen operativo negativo: {formatear_monto(row['Margen Operativo'])}"
             })
@@ -104,43 +105,54 @@ def generar_alertas(df):
                 'titulo': '✅ Recuperación de Margen',
                 'mensaje': f"El último mes ({df.iloc[-1]['Mes']}) volvió a margen operativo positivo: {formatear_monto(df.iloc[-1]['Margen Operativo'])}"
             })
-    
     return alertas
 
 def obtener_archivo_cliente(codigo_cliente):
-    """Busca el archivo Excel del cliente"""
     cliente_dir = DATOS_DIR / codigo_cliente
     if cliente_dir.exists():
         archivos = list(cliente_dir.glob("*.xlsx"))
         if archivos:
-            return archivos[0]  # Retorna el primer archivo encontrado
+            return archivos[0]
     return None
 
-# Obtener parámetro de cliente desde URL
+def obtener_documentos_cliente(codigo_cliente):
+    """Obtiene lista de PDFs disponibles para el cliente"""
+    cliente_dir = DATOS_DIR / codigo_cliente / "documentos"
+    documentos = []
+    
+    if cliente_dir.exists():
+        # Buscar PDFs
+        pdfs = list(cliente_dir.glob("*.pdf"))
+        for pdf in pdfs:
+            # Determinar tipo de documento
+            nombre = pdf.stem.lower()
+            if 'arca' in nombre or 'arba' in nombre:
+                tipo = "Constancia ARCA"
+                icono = "📄"
+            elif 'pyme' in nombre:
+                tipo = "Certificado PyME"
+                icono = "🏭"
+            elif 'reporte' in nombre or 'informe' in nombre:
+                tipo = "Reporte Mensual"
+                icono = "📊"
+            else:
+                tipo = "Documento"
+                icono = "📎"
+            
+            documentos.append({
+                'nombre': pdf.name,
+                'tipo': tipo,
+                'icono': icono,
+                'ruta': pdf,
+                'fecha': datetime.fromtimestamp(pdf.stat().st_mtime).strftime('%d/%m/%Y')
+            })
+    
+    return sorted(documentos, key=lambda x: x['tipo'])
+
+# Obtener parámetro de cliente
 query_params = st.query_params
 codigo_cliente = query_params.get("cliente", None)
-
-# Cargar clientes
 config = cargar_clientes()
-
-# CSS personalizado
-st.markdown("""
-<style>
-    .cliente-header {
-        background: linear-gradient(90deg, #1f77b4 0%, #2ca02c 100%);
-        padding: 20px;
-        border-radius: 10px;
-        margin-bottom: 20px;
-        color: white;
-    }
-    .metric-card {
-        background: #f0f2f6;
-        padding: 15px;
-        border-radius: 8px;
-        margin: 10px 0;
-    }
-</style>
-""", unsafe_allow_html=True)
 
 # Validar acceso
 if not codigo_cliente:
@@ -159,7 +171,6 @@ if codigo_cliente not in config['clientes']:
     st.markdown("El código de cliente proporcionado no es válido.")
     st.stop()
 
-# Obtener datos del cliente
 cliente = config['clientes'][codigo_cliente]
 
 if not cliente['activo']:
@@ -167,230 +178,388 @@ if not cliente['activo']:
     st.markdown("Tu cuenta está temporalmente inactiva. Contacta a tu contador.")
     st.stop()
 
-# Header personalizado
-st.markdown(f"""
-<div class="cliente-header">
-    <h1>📊 Dashboard Contable</h1>
-    <h2>{cliente['nombre']}</h2>
-    <p>Bienvenido a tu panel de análisis financiero</p>
-</div>
-""", unsafe_allow_html=True)
+# HEADER
+st.title("📊 Dashboard Financiero")
+st.subheader(f"**{cliente['nombre']}**")
+st.divider()
 
-# Buscar archivo del cliente
-archivo_cliente = obtener_archivo_cliente(codigo_cliente)
-
-if archivo_cliente:
-    # Procesar archivo existente
-    df_completo = procesar_excel(archivo_cliente)
+# SIDEBAR
+with st.sidebar:
+    st.markdown("### 📑 Sección")
     
-    if df_completo is not None:
-        # Sidebar con filtros
-        with st.sidebar:
-            st.header("🔍 Filtros")
-            st.markdown("Selecciona el rango de meses:")
-            
-            meses_disponibles = df_completo['Mes'].tolist()
-            
-            col_desde, col_hasta = st.columns(2)
-            with col_desde:
-                mes_desde = st.selectbox("Desde:", options=meses_disponibles, index=0)
-            with col_hasta:
-                mes_hasta = st.selectbox("Hasta:", options=meses_disponibles, index=len(meses_disponibles)-1)
-            
-            idx_desde = meses_disponibles.index(mes_desde)
-            idx_hasta = meses_disponibles.index(mes_hasta)
-            
-            if idx_desde > idx_hasta:
-                st.error("⚠️ 'Desde' debe ser anterior a 'Hasta'")
-                df = df_completo
-            else:
-                df = df_completo.iloc[idx_desde:idx_hasta+1].copy()
-            
-            st.markdown(f"**Mostrando:** {len(df)} meses")
-            
-            st.markdown("---")
-            st.info("💡 Usa los filtros para analizar períodos específicos")
-        
-        # Generar alertas
-        alertas = generar_alertas(df)
-        
-        if alertas:
-            st.header("🚨 Alertas e Insights")
-            for alerta in alertas:
-                if alerta['tipo'] == 'danger':
-                    st.error(f"**{alerta['titulo']}**\n\n{alerta['mensaje']}")
-                elif alerta['tipo'] == 'success':
-                    st.success(f"**{alerta['titulo']}**\n\n{alerta['mensaje']}")
-            st.markdown("---")
-        
-        # KPIs principales
-        st.header("📈 Métricas Principales")
-        
-        col1, col2, col3, col4, col5 = st.columns(5)
-        
-        with col1:
-            ventas_total = df['Ventas'].sum()
-            ventas_promedio = df['Ventas'].mean()
-            st.metric("Ventas Totales", formatear_monto(ventas_total), delta=f"Prom: {formatear_monto(ventas_promedio)}")
-        
-        with col2:
-            compras_total = df['Total Compras'].sum()
-            st.metric("Compras Totales", formatear_monto(compras_total))
-        
-        with col3:
-            margen_bruto_total = df['Margen Bruto'].sum()
-            margen_bruto_pct = (margen_bruto_total / ventas_total * 100)
-            st.metric("Margen Bruto", formatear_monto(margen_bruto_total), delta=f"{margen_bruto_pct:.1f}%")
-        
-        with col4:
-            margen_operativo_total = df['Margen Operativo'].sum()
-            margen_operativo_pct = (margen_operativo_total / ventas_total * 100)
-            st.metric("Margen Operativo", formatear_monto(margen_operativo_total), delta=f"{margen_operativo_pct:.1f}%")
-        
-        with col5:
-            ratio_promedio = df['Ratio Ventas/Sueldos'].mean()
-            st.metric("Ratio Ventas/Sueldos", f"{ratio_promedio:.2f}x")
-        
-        st.markdown("---")
-        
-        # Gráficos principales
-        tab1, tab2, tab3, tab4 = st.tabs(["📊 Ventas", "🛒 Compras", "💹 Rentabilidad", "📋 Datos"])
-        
-        with tab1:
-            col_izq, col_der = st.columns(2)
-            
-            with col_izq:
-                st.subheader("Evolución de Ventas")
-                promedio_ventas = df['Ventas'].mean()
-                
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(x=df['Mes'], y=df['Ventas'], mode='lines+markers', name='Ventas', line=dict(color='#1f77b4', width=3)))
-                fig.add_trace(go.Scatter(x=df['Mes'], y=[promedio_ventas] * len(df), mode='lines', name='Promedio', line=dict(color='red', width=2, dash='dash')))
-                fig.update_layout(height=400, xaxis_title="Mes", yaxis_title="Ventas ($)", hovermode='x unified')
-                st.plotly_chart(fig, use_container_width=True)
-            
-            with col_der:
-                st.subheader("Comparación vs Promedio")
-                df['% Dif vs Promedio'] = ((df['Ventas'] - promedio_ventas) / promedio_ventas * 100).round(1)
-                colores = ['green' if x > 0 else 'red' for x in df['% Dif vs Promedio']]
-                
-                fig = go.Figure()
-                fig.add_trace(go.Bar(x=df['Mes'], y=df['% Dif vs Promedio'], marker_color=colores))
-                fig.update_layout(height=400, xaxis_title="Mes", yaxis_title="Diferencia vs Promedio (%)")
-                st.plotly_chart(fig, use_container_width=True)
-        
-        with tab2:
-            col_izq, col_der = st.columns(2)
-            
-            with col_izq:
-                st.subheader("Evolución de Compras")
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(x=df['Mes'], y=df['Compras CF'], mode='lines+markers', name='Compras CF', stackgroup='one'))
-                fig.add_trace(go.Scatter(x=df['Mes'], y=df['Compras Exentas'], mode='lines+markers', name='Compras Exentas', stackgroup='one'))
-                fig.update_layout(height=400, xaxis_title="Mes", yaxis_title="Compras ($)", hovermode='x unified')
-                st.plotly_chart(fig, use_container_width=True)
-            
-            with col_der:
-                st.subheader("Composición de Compras")
-                avg_cf = df['Compras CF'].mean()
-                avg_exentas = df['Compras Exentas'].mean()
-                
-                fig = go.Figure()
-                fig.add_trace(go.Pie(labels=['Compras CF', 'Compras Exentas'], values=[avg_cf, avg_exentas]))
-                fig.update_layout(height=400)
-                st.plotly_chart(fig, use_container_width=True)
-        
-        with tab3:
-            col_izq, col_der = st.columns(2)
-            
-            with col_izq:
-                st.subheader("Margen Operativo")
-                promedio_margen = df['Margen Operativo'].mean()
-                colores = ['green' if x > 0 else 'red' for x in df['Margen Operativo']]
-                
-                fig = go.Figure()
-                fig.add_trace(go.Bar(x=df['Mes'], y=df['Margen Operativo'], marker_color=colores))
-                fig.add_trace(go.Scatter(x=df['Mes'], y=[promedio_margen] * len(df), mode='lines', name='Promedio', line=dict(color='blue', width=2, dash='dash')))
-                fig.add_hline(y=0, line_dash="solid", line_color="black", line_width=1)
-                fig.update_layout(height=400, xaxis_title="Mes", yaxis_title="Margen Operativo ($)")
-                st.plotly_chart(fig, use_container_width=True)
-            
-            with col_der:
-                st.subheader("Márgenes Comparados")
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(x=df['Mes'], y=df['% Margen Bruto'], mode='lines+markers', name='% Margen Bruto'))
-                fig.add_trace(go.Scatter(x=df['Mes'], y=df['% Margen Operativo'], mode='lines+markers', name='% Margen Operativo'))
-                fig.update_layout(height=400, xaxis_title="Mes", yaxis_title="Porcentaje (%)", hovermode='x unified')
-                st.plotly_chart(fig, use_container_width=True)
-        
-        with tab4:
-            st.subheader("Tabla de Datos Completa")
-            df_display = df[['Mes', 'Ventas', 'Compras CF', 'Compras Exentas', 'Total Compras', 
-                             'Margen Bruto', '% Margen Bruto', 'Sueldos y CS', 
-                             'Margen Operativo', '% Margen Operativo', 'Ratio Ventas/Sueldos']].copy()
-            
-            for col in ['Ventas', 'Compras CF', 'Compras Exentas', 'Total Compras', 'Margen Bruto', 'Sueldos y CS', 'Margen Operativo']:
-                df_display[col] = df_display[col].apply(lambda x: formatear_monto(x))
-            
-            df_display['% Margen Bruto'] = df['% Margen Bruto'].apply(lambda x: formatear_porcentaje(x))
-            df_display['% Margen Operativo'] = df['% Margen Operativo'].apply(lambda x: formatear_porcentaje(x))
-            df_display['Ratio Ventas/Sueldos'] = df['Ratio Ventas/Sueldos'].apply(lambda x: f"{x:.2f}x" if pd.notna(x) else "N/A")
-            
-            st.dataframe(df_display, use_container_width=True, hide_index=True)
-        
-        # Resumen ejecutivo
-        st.markdown("---")
-        st.header("📊 Resumen Ejecutivo")
-        
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.markdown("**🎯 Ventas**")
-            mejor_mes_ventas = df.loc[df['Ventas'].idxmax()]
-            peor_mes_ventas = df.loc[df['Ventas'].idxmin()]
-            st.write(f"✅ Mejor mes: **{mejor_mes_ventas['Mes']}**")
-            st.write(f"   {formatear_monto(mejor_mes_ventas['Ventas'])}")
-            st.write(f"⚠️ Menor mes: **{peor_mes_ventas['Mes']}**")
-            st.write(f"   {formatear_monto(peor_mes_ventas['Ventas'])}")
-        
-        with col2:
-            st.markdown("**💹 Rentabilidad**")
-            mejor_margen = df.loc[df['Margen Operativo'].idxmax()]
-            peor_margen = df.loc[df['Margen Operativo'].idxmin()]
-            st.write(f"✅ Mejor margen: **{mejor_margen['Mes']}**")
-            st.write(f"   {formatear_monto(mejor_margen['Margen Operativo'])}")
-            st.write(f"⚠️ Menor margen: **{peor_margen['Mes']}**")
-            st.write(f"   {formatear_monto(peor_margen['Margen Operativo'])}")
-        
-        with col3:
-            st.markdown("**💡 Eficiencia**")
-            mejor_ratio = df.loc[df['Ratio Ventas/Sueldos'].idxmax()]
-            peor_ratio = df.loc[df['Ratio Ventas/Sueldos'].idxmin()]
-            st.write(f"✅ Mejor ratio: **{mejor_ratio['Mes']}**")
-            st.write(f"   {mejor_ratio['Ratio Ventas/Sueldos']:.2f}x")
-            st.write(f"⚠️ Menor ratio: **{peor_ratio['Mes']}**")
-            st.write(f"   {peor_ratio['Ratio Ventas/Sueldos']:.2f}x")
-
-else:
-    # No hay archivo para este cliente
-    st.info("📁 Aún no hay datos disponibles")
-    st.markdown("""
-    ### Información
+    # Navegación con iconos
+    opciones = {
+        "📊 Dashboard": "Dashboard",
+        "📁 Documentos": "Documentos"
+    }
     
-    Tu contador está preparando tus datos para visualización.
+    pagina_display = st.radio(
+        "Selecciona una opción:",
+        options=list(opciones.keys()),
+        label_visibility="collapsed"
+    )
     
-    Una vez que los datos estén disponibles, podrás ver:
-    - 📊 Evolución de ventas
-    - 🛒 Análisis de compras
-    - 💹 Rentabilidad y márgenes
-    - 📈 Indicadores de eficiencia
+    pagina = opciones[pagina_display]
     
-    Por favor, vuelve a consultar pronto.
+    st.divider()
+    st.markdown("### ℹ️ Información")
+    st.markdown(f"""
+**Cliente:** {cliente['nombre']}  
+**Última actualización:** {datetime.now().strftime('%d/%m/%Y')}
     """)
 
+# ============== PÁGINA: DOCUMENTOS ==============
+if pagina == "Documentos":
+    st.markdown("## 📁 Mis Documentos")
+    st.markdown("Accedé y descargá tus documentos fiscales y reportes.")
+    st.divider()
+    
+    documentos = obtener_documentos_cliente(codigo_cliente)
+    
+    if documentos:
+        # Agrupar por tipo
+        tipos = {}
+        for doc in documentos:
+            tipo = doc['tipo']
+            if tipo not in tipos:
+                tipos[tipo] = []
+            tipos[tipo].append(doc)
+        
+        # Mostrar documentos agrupados
+        for tipo, docs in tipos.items():
+            with st.expander(f"{docs[0]['icono']} **{tipo}** ({len(docs)})", expanded=True):
+                for doc in docs:
+                    col1, col2, col3 = st.columns([3, 2, 1])
+                    with col1:
+                        st.markdown(f"**{doc['nombre']}**")
+                    with col2:
+                        st.caption(f"📅 {doc['fecha']}")
+                    with col3:
+                        # Leer el archivo para el botón de descarga
+                        with open(doc['ruta'], 'rb') as f:
+                            st.download_button(
+                                label="⬇️ Descargar",
+                                data=f.read(),
+                                file_name=doc['nombre'],
+                                mime="application/pdf",
+                                key=doc['nombre']
+                            )
+                st.divider()
+    else:
+        st.info("📭 Aún no hay documentos disponibles")
+        st.markdown("""
+        ### Documentos que estarán disponibles:
+        
+        - 📄 **Constancia de ARCA/ARBA**
+        - 🏭 **Certificado PyME**
+        - 📊 **Reportes Mensuales**
+        
+        Tu contador subirá los documentos próximamente.
+        """)
+    
+    # Botón para generar reporte (si hay datos)
+    archivo_cliente = obtener_archivo_cliente(codigo_cliente)
+    if archivo_cliente:
+        st.divider()
+        st.markdown("### 📊 Generar Reporte")
+        st.markdown("Generá un reporte PDF con los datos del dashboard actual.")
+        
+        if st.button("🔄 Generar Reporte PDF", type="primary"):
+            st.info("⏳ Generando reporte... Esta funcionalidad estará disponible próximamente.")
+            # TODO: Implementar generación de PDF
+
+# ============== PÁGINA: DASHBOARD ==============
+else:
+    archivo_cliente = obtener_archivo_cliente(codigo_cliente)
+    
+    if archivo_cliente:
+        df_completo = procesar_excel(archivo_cliente)
+        
+        if df_completo is not None:
+            # Convertir fechas al español
+            df_completo['Mes'] = df_completo['Mes'].apply(convertir_fecha_español)
+            
+            # Filtros en sidebar
+            with st.sidebar:
+                st.divider()
+                st.markdown("#### 📅 Filtrar Período")
+                meses_disponibles = df_completo['Mes'].tolist()
+                
+                mes_desde = st.selectbox("Desde:", options=meses_disponibles, index=0)
+                mes_hasta = st.selectbox("Hasta:", options=meses_disponibles, index=len(meses_disponibles)-1)
+                
+                idx_desde = meses_disponibles.index(mes_desde)
+                idx_hasta = meses_disponibles.index(mes_hasta)
+                
+                if idx_desde > idx_hasta:
+                    st.error("⚠️ 'Desde' debe ser anterior a 'Hasta'")
+                    df = df_completo
+                else:
+                    df = df_completo.iloc[idx_desde:idx_hasta+1].copy()
+                
+                st.info(f"📊 Mostrando **{len(df)} meses**")
+            
+            # Alertas
+            alertas = generar_alertas(df)
+            if alertas:
+                for alerta in alertas:
+                    if alerta['tipo'] == 'warning':
+                        st.warning(f"**{alerta['titulo']}**  \n{alerta['mensaje']}")
+                    elif alerta['tipo'] == 'success':
+                        st.success(f"**{alerta['titulo']}**  \n{alerta['mensaje']}")
+            
+            # KPIs
+            st.markdown("### 📈 Indicadores Principales")
+            col1, col2, col3, col4, col5 = st.columns(5)
+            
+            ventas_total = df['Ventas'].sum()
+            ventas_promedio = df['Ventas'].mean()
+            compras_total = df['Total Compras'].sum()
+            sueldos_total = df['Sueldos y CS'].sum()
+            margen_bruto_total = df['Margen Bruto'].sum()
+            margen_bruto_pct = (margen_bruto_total / ventas_total * 100)
+            margen_operativo_total = df['Margen Operativo'].sum()
+            margen_operativo_pct = (margen_operativo_total / ventas_total * 100)
+            ratio_sueldos_ventas = (sueldos_total / ventas_total * 100)
+            
+            with col1:
+                st.metric("Ventas Totales", formatear_monto(ventas_total), 
+                         delta=f"Prom: {formatear_monto(ventas_promedio)}")
+            with col2:
+                st.metric("Compras Totales", formatear_monto(compras_total))
+            with col3:
+                st.metric("Margen Bruto", formatear_monto(margen_bruto_total),
+                         delta=f"{margen_bruto_pct:.1f}%")
+            with col4:
+                color = "normal" if margen_operativo_total >= 0 else "inverse"
+                st.metric("Margen Operativo", formatear_monto(margen_operativo_total),
+                         delta=f"{margen_operativo_pct:.1f}%", delta_color=color)
+            with col5:
+                st.metric("Sueldos / Ventas", f"{ratio_sueldos_ventas:.1f}%")
+            
+            st.divider()
+            
+            # TABS
+            tab1, tab2, tab3, tab4 = st.tabs(["💰 Ventas y Compras", "🧑‍💼 Sueldos", "💹 Rentabilidad", "📋 Resumen Ejecutivo"])
+            
+            with tab1:
+                st.markdown("### Ventas y Compras")
+                col_izq, col_der = st.columns(2)
+                
+                with col_izq:
+                    st.markdown("#### Evolución de Ventas")
+                    promedio_ventas = df['Ventas'].mean()
+                    
+                    fig = go.Figure()
+                    fig.add_trace(go.Scatter(
+                        x=df['Mes'], y=df['Ventas'],
+                        mode='lines+markers',
+                        name='Ventas',
+                        line=dict(color='#0066cc', width=3),
+                        marker=dict(size=8)
+                    ))
+                    fig.add_trace(go.Scatter(
+                        x=df['Mes'], y=[promedio_ventas]*len(df),
+                        mode='lines',
+                        name='Promedio',
+                        line=dict(color='red', width=2, dash='dash')
+                    ))
+                    fig.update_layout(height=350, hovermode='x unified')
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                with col_der:
+                    st.markdown("#### Evolución de Compras")
+                    fig = go.Figure()
+                    fig.add_trace(go.Scatter(
+                        x=df['Mes'], y=df['Compras CF'],
+                        mode='lines+markers',
+                        name='Compras CF',
+                        line=dict(color='green', width=2),
+                        stackgroup='one'
+                    ))
+                    fig.add_trace(go.Scatter(
+                        x=df['Mes'], y=df['Compras Exentas'],
+                        mode='lines+markers',
+                        name='Compras Exentas',
+                        line=dict(color='orange', width=2),
+                        stackgroup='one'
+                    ))
+                    fig.update_layout(height=350, hovermode='x unified')
+                    st.plotly_chart(fig, use_container_width=True)
+            
+            with tab2:
+                st.markdown("### Sueldos")
+                
+                st.markdown("#### Sueldos como % de Ventas")
+                df['% Sueldos/Ventas'] = (df['Sueldos y CS'] / df['Ventas'] * 100).round(1)
+                
+                fig = go.Figure()
+                fig.add_trace(go.Bar(
+                    x=df['Mes'], y=df['% Sueldos/Ventas'],
+                    marker_color='#3498db',
+                    text=df['% Sueldos/Ventas'].apply(lambda x: f"{x:.1f}%"),
+                    textposition='outside',
+                    textfont=dict(size=12)
+                ))
+                fig.add_hline(y=df['% Sueldos/Ventas'].mean(), 
+                            line_dash="dash", 
+                            line_color="red",
+                            annotation_text="Promedio",
+                            annotation_position="right")
+                fig.update_layout(
+                    height=400,
+                    yaxis_title="Porcentaje (%)",
+                    showlegend=False,
+                    yaxis=dict(range=[0, df['% Sueldos/Ventas'].max() * 1.2])
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            
+            with tab3:
+                st.markdown("### Rentabilidad")
+                col_izq, col_der = st.columns(2)
+                
+                with col_izq:
+                    st.markdown("#### Margen Operativo")
+                    promedio_margen = df['Margen Operativo'].mean()
+                    colores = ['green' if x > 0 else 'red' for x in df['Margen Operativo']]
+                    
+                    fig = go.Figure()
+                    fig.add_trace(go.Bar(
+                        x=df['Mes'], y=df['Margen Operativo'],
+                        marker_color=colores,
+                        name='Margen Operativo'
+                    ))
+                    fig.add_trace(go.Scatter(
+                        x=df['Mes'], y=[promedio_margen]*len(df),
+                        mode='lines',
+                        name='Promedio',
+                        line=dict(color='blue', width=2, dash='dash')
+                    ))
+                    fig.add_hline(y=0, line_dash="solid", line_color="black", line_width=1)
+                    fig.update_layout(height=350, hovermode='x unified')
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                with col_der:
+                    st.markdown("#### Evolución de Márgenes (%)")
+                    fig = go.Figure()
+                    fig.add_trace(go.Scatter(
+                        x=df['Mes'], y=df['% Margen Bruto'],
+                        mode='lines+markers',
+                        name='% Margen Bruto',
+                        line=dict(color='blue', width=2)
+                    ))
+                    fig.add_trace(go.Scatter(
+                        x=df['Mes'], y=df['% Margen Operativo'],
+                        mode='lines+markers',
+                        name='% Margen Operativo',
+                        line=dict(color='green', width=2)
+                    ))
+                    fig.update_layout(height=350, hovermode='x unified')
+                    st.plotly_chart(fig, use_container_width=True)
+            
+            with tab4:
+                st.markdown("### Resumen Ejecutivo")
+                
+                # Tabla de datos
+                st.markdown("#### 📊 Datos Completos")
+                
+                # Calcular % Sueldos/Ventas si no existe
+                if '% Sueldos/Ventas' not in df.columns:
+                    df['% Sueldos/Ventas'] = (df['Sueldos y CS'] / df['Ventas'] * 100).round(1)
+                
+                # Seleccionar columnas en el orden correcto
+                df_display = df[['Mes', 'Ventas', 'Compras CF', 'Compras Exentas', 'Sueldos y CS',
+                                 'Margen Operativo', '% Margen Operativo', '% Sueldos/Ventas']].copy()
+                
+                # Guardar valores numéricos para usar en iconos
+                valores_margen_op = df_display['% Margen Operativo'].copy()
+                valores_sueldos = df_display['% Sueldos/Ventas'].copy()
+                
+                # Formatear columnas de montos
+                for col in ['Ventas', 'Compras CF', 'Compras Exentas', 'Sueldos y CS', 'Margen Operativo']:
+                    df_display[col] = df_display[col].apply(formatear_monto)
+                
+                # Formatear % Margen Operativo con iconos
+                def formato_margen_icono(val):
+                    if pd.isna(val):
+                        return "N/A"
+                    if val >= 20:
+                        return f"🟢 {val:.1f}%"
+                    elif val >= 10:
+                        return f"🔵 {val:.1f}%"
+                    elif val >= 0:
+                        return f"🟡 {val:.1f}%"
+                    else:
+                        return f"🔴 {val:.1f}%"
+                
+                # Formatear % Sueldos/Ventas con iconos
+                def formato_sueldos_icono(val):
+                    if pd.isna(val):
+                        return "N/A"
+                    if val <= 10:
+                        return f"🟢 {val:.1f}%"
+                    elif val <= 15:
+                        return f"🔵 {val:.1f}%"
+                    elif val <= 20:
+                        return f"🟡 {val:.1f}%"
+                    else:
+                        return f"🔴 {val:.1f}%"
+                
+                df_display['% Margen Operativo'] = valores_margen_op.apply(formato_margen_icono)
+                df_display['% Sueldos/Ventas'] = valores_sueldos.apply(formato_sueldos_icono)
+                
+                st.dataframe(df_display, use_container_width=True, hide_index=True)
+                
+                # Leyenda de colores
+                st.markdown("""
+                **Leyenda:**  
+                🟢 Excelente • 🔵 Bueno • 🟡 Aceptable • 🔴 Requiere atención
+                """)
+                
+                # Resumen de mejores y peores meses
+                st.divider()
+                st.markdown("#### 📈 Análisis de Períodos")
+                
+                col1, col2, col3 = st.columns(3)
+                
+                mejor_mes_ventas = df.loc[df['Ventas'].idxmax()]
+                peor_mes_ventas = df.loc[df['Ventas'].idxmin()]
+                mejor_margen = df.loc[df['Margen Operativo'].idxmax()]
+                peor_margen = df.loc[df['Margen Operativo'].idxmin()]
+                mejor_sueldo_eficiencia = df.loc[df['% Sueldos/Ventas'].idxmin()]
+                peor_sueldo_eficiencia = df.loc[df['% Sueldos/Ventas'].idxmax()]
+                
+                with col1:
+                    st.markdown("##### 🎯 Ventas")
+                    st.success(f"**✅ Mejor:** {mejor_mes_ventas['Mes']}  \n{formatear_monto(mejor_mes_ventas['Ventas'])}")
+                    st.warning(f"**⚠️ Menor:** {peor_mes_ventas['Mes']}  \n{formatear_monto(peor_mes_ventas['Ventas'])}")
+                
+                with col2:
+                    st.markdown("##### 💹 Rentabilidad")
+                    st.success(f"**✅ Mejor:** {mejor_margen['Mes']}  \n{formatear_monto(mejor_margen['Margen Operativo'])}")
+                    st.warning(f"**⚠️ Menor:** {peor_margen['Mes']}  \n{formatear_monto(peor_margen['Margen Operativo'])}")
+                
+                with col3:
+                    st.markdown("##### 💡 Eficiencia Sueldos")
+                    st.success(f"**✅ Más eficiente:** {mejor_sueldo_eficiencia['Mes']}  \n{mejor_sueldo_eficiencia['% Sueldos/Ventas']:.1f}%")
+                    st.warning(f"**⚠️ Menos eficiente:** {peor_sueldo_eficiencia['Mes']}  \n{peor_sueldo_eficiencia['% Sueldos/Ventas']:.1f}%")
+    
+    else:
+        st.info("📁 Aún no hay datos disponibles")
+        st.markdown("""
+        ### Información
+        
+        Tu contador está preparando tus datos para visualización.
+        
+        Una vez que los datos estén disponibles, podrás ver:
+        - 📊 Evolución de ventas
+        - 🛒 Análisis de compras
+        - 💹 Rentabilidad y márgenes
+        - 📈 Indicadores de eficiencia
+        
+        Por favor, vuelve a consultar pronto.
+        """)
+
 # Footer
-st.markdown("---")
-st.markdown(
-    "<div style='text-align: center; color: #666;'>Dashboard Contable Multi-Cliente | Acceso seguro y confidencial</div>",
-    unsafe_allow_html=True
-)
+st.divider()
+st.caption("Dashboard Contable Profesional • Gestión Financiera Empresarial")
